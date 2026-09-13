@@ -130,72 +130,40 @@ app.post('/api/availability', async (req, res) => {
     for (const [slotId, slotData] of Object.entries(availability)) {
       if (!slotData.available) continue;
 
-      // Parse slot ID (e.g., "2026-09-18-am" -> date: "2026-09-18", time: "am")
       const parts = slotId.split('-');
       const timeSlot = parts[parts.length - 1];
       const dateStr = parts.slice(0, -1).join('-');
 
-      // Find matching shift
       const shift = shifts.find(s =>
         s.ShiftDate.split('T')[0] === dateStr &&
         s.TimeSlot?.toLowerCase() === timeSlot?.toLowerCase()
       );
 
-      if (!shift) {
-        console.warn(`No shift found for ${slotId}`);
-        continue;
-      }
+      if (!shift) continue;
 
       const shiftDateFormatted = shift.ShiftDate.split('T')[0];
       const shiftTimeFormatted = shift.TimeSlot.toUpperCase();
       const title = `${email} - ${shiftDateFormatted} ${shiftTimeFormatted}`;
 
-      // Check if entry already exists for this email + date + time
+      const fields = {
+        Title: title,
+        PersonEmail: email,
+        ShiftDate: shiftDateFormatted,
+        TimeSlot: shiftTimeFormatted,
+        Available: true,
+        PairWithEmail: slotData.pairWith || null,
+        IncludesPlus1: slotData.hasPlus1 || false,
+        Plus1Name: slotData.plus1Name || null,
+      };
+
       try {
-        const filterQuery = `PersonEmail eq '${email}' and fields/ShiftDate eq '${shiftDateFormatted}T00:00:00Z' and fields/TimeSlot eq '${shiftTimeFormatted}'`;
-        const checkUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items?$filter=${encodeURIComponent(filterQuery)}`;
-        
-        console.log(`Checking for existing: ${checkUrl}`);
-        
-        const existingRes = await axios.get(checkUrl, {
+        const createUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items`;
+        await axios.post(createUrl, { fields }, {
           headers: { Authorization: `Bearer ${token}` }
-        }).catch((err) => {
-          console.log('Filter check failed:', err.response?.data || err.message);
-          return ({ data: { value: [] } });
         });
-
-        const existingItem = existingRes.data?.value?.[0];
-
-        const fields = {
-          Title: title,
-          PersonEmail: email,
-          ShiftDate: shiftDateFormatted,
-          TimeSlot: shiftTimeFormatted,
-          Available: true,
-          PairWithEmail: slotData.pairWith || null,
-          IncludesPlus1: slotData.hasPlus1 || false,
-          Plus1Name: slotData.plus1Name || null,
-        };
-
-        if (existingItem) {
-          // Update existing entry
-          const updateUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items/${existingItem.id}`;
-          await axios.patch(updateUrl, { fields }, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          console.log(`Updated availability for ${email} on ${shiftDateFormatted} ${shiftTimeFormatted}`);
-          results.push({ type: 'updated', slot: slotId });
-        } else {
-          // Create new entry
-          const createUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items`;
-          await axios.post(createUrl, { fields }, {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          console.log(`Created availability for ${email} on ${shiftDateFormatted} ${shiftTimeFormatted}`);
-          results.push({ type: 'created', slot: slotId });
-        }
+        results.push({ type: 'created', slot: slotId });
       } catch (slotError) {
-        console.error(`Error processing ${slotId}:`, slotError.message);
+        console.error(`Error for ${slotId}:`, slotError.response?.data || slotError.message);
       }
     }
 
