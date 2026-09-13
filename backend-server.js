@@ -33,7 +33,6 @@ let tokenExpiry = null;
 
 // Get OAuth token from Azure AD
 async function getAccessToken() {
-  // Return cached token if still valid
   if (cachedToken && tokenExpiry > Date.now()) {
     return cachedToken;
   }
@@ -50,7 +49,7 @@ async function getAccessToken() {
     );
 
     cachedToken = response.data.access_token;
-    tokenExpiry = Date.now() + (response.data.expires_in * 1000) - 60000; // Refresh 1 min before expiry
+    tokenExpiry = Date.now() + (response.data.expires_in * 1000) - 60000;
     return cachedToken;
   } catch (error) {
     console.error('Error getting access token:', error.response?.data || error.message);
@@ -58,7 +57,7 @@ async function getAccessToken() {
   }
 }
 
-// Get SharePoint items (with optional filter)
+// Get SharePoint items
 async function getSharePointItems(listId, filter = null) {
   const token = await getAccessToken();
   const graphUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${listId}/items?$expand=fields`;
@@ -75,27 +74,8 @@ async function getSharePointItems(listId, filter = null) {
   }
 }
 
-// Write to SharePoint list
-async function writeToSharePoint(listId, fields) {
-  const token = await getAccessToken();
-  const graphUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${listId}/items`;
-
-  try {
-    const response = await axios.post(
-      graphUrl,
-      { fields },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    return response.data;
-  } catch (error) {
-    console.error('Error writing to SharePoint:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
 // Routes
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -104,32 +84,26 @@ app.get('/health', (req, res) => {
 app.get('/api/shifts', async (req, res) => {
   try {
     const shifts = await getSharePointItems(CONFIG.SHIFTS_LIST_ID);
-
-    // Sort by date
     shifts.sort((a, b) => new Date(a.ShiftDate) - new Date(b.ShiftDate));
-
     res.json(shifts);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch shifts' });
   }
 });
 
-// Get list of colleagues (for pairing dropdown)
+// Get list of colleagues
 app.get('/api/colleagues', async (req, res) => {
   try {
     const availabilities = await getSharePointItems(CONFIG.AVAILABILITY_LIST_ID);
-
-    // Get unique people with their emails
     const colleagues = {};
     availabilities.forEach(avail => {
       if (avail.PersonEmail && !colleagues[avail.PersonEmail]) {
         colleagues[avail.PersonEmail] = {
           email: avail.PersonEmail,
-          name: avail.PersonEmail.split('@')[0], // Use part before @ as name
+          name: avail.PersonEmail.split('@')[0],
         };
       }
     });
-
     res.json(Object.values(colleagues));
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch colleagues' });
@@ -140,7 +114,6 @@ app.get('/api/colleagues', async (req, res) => {
 app.post('/api/availability', async (req, res) => {
   const { email, availability } = req.body;
 
-  // Validate email
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
@@ -150,21 +123,19 @@ app.post('/api/availability', async (req, res) => {
   }
 
   try {
-    // For each slot, create or update availability record
-    const slots = Object.entries(availability);
+    const shifts = await getSharePointItems(CONFIG.SHIFTS_LIST_ID);
     const results = [];
+    const token = await getAccessToken();
 
-    for (const [slotId, slotData] of slots) {
-      if (!slotData.available) continue; // Skip unavailable slots
+    for (const [slotId, slotData] of Object.entries(availability)) {
+      if (!slotData.available) continue;
 
+      // Parse slot ID (e.g., "2026-09-18-am" -> date: "2026-09-18", time: "am")
       const parts = slotId.split('-');
-      const timeSlot = parts[parts.length - 1]; // Last part (am/pm)
-      const dateStr = parts.slice(0, -1).join('-'); // Everything before (date)
+      const timeSlot = parts[parts.length - 1];
+      const dateStr = parts.slice(0, -1).join('-');
 
       // Find matching shift
-      const shifts = await getSharePointItems(CONFIG.SHIFTS_LIST_ID);
-      console.log('DEBUG: Shifts from SharePoint:', JSON.stringify(shifts, null, 2));
-      
       const shift = shifts.find(s =>
         s.ShiftDate.split('T')[0] === dateStr &&
         s.TimeSlot?.toLowerCase() === timeSlot?.toLowerCase()
@@ -175,36 +146,52 @@ app.post('/api/availability', async (req, res) => {
         continue;
       }
 
-      // Create availability record
-      // Check if entry exists for this person + shift
-      const existingRes = await axios.get(
-        `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items?$filter=PersonEmail eq '${email}' and fields/ShiftID eq '${shift.id}'`,
-        { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
-      ).catch(() => ({ data: { value: [] } }));
-      
-      const existing = existingRes.data?.value?.[0];
-      const title = `${email} - ${shift.TimeSlot} ${shift.ShiftDate.split('T')[0]}`;
-      
-      const fields = {
-        Title: title,
-        PersonEmail: email,
-        Available: true,
-        PairWithEmail: slotData.pairWith || null,
-        IncludesPlus1: slotData.hasPlus1 || false,
-        Plus1Name: slotData.plus1Name || null,
-      };
-      
-      let result;
-      if (existing) {
-        // Update existing
-        const graphUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items/${existing.id}`;
-        result = await axios.patch(graphUrl, { fields }, { headers: { Authorization: `Bearer ${await getAccessToken()}` } });
-      } else {
-        // Create new with ShiftID lookup
-        fields.ShiftID = shift.id;
-        result = await writeToSharePoint(CONFIG.AVAILABILITY_LIST_ID, fields);
+      const shiftDateFormatted = shift.ShiftDate.split('T')[0];
+      const shiftTimeFormatted = shift.TimeSlot.toUpperCase();
+      const title = `${email} - ${shiftDateFormatted} ${shiftTimeFormatted}`;
+
+      // Check if entry already exists for this email + date + time
+      try {
+        const filterQuery = `PersonEmail eq '${email}' and fields/ShiftDate eq '${shiftDateFormatted}T00:00:00Z' and fields/TimeSlot eq '${shiftTimeFormatted}'`;
+        const checkUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items?$filter=${encodeURIComponent(filterQuery)}`;
+
+        const existingRes = await axios.get(checkUrl, {
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => ({ data: { value: [] } }));
+
+        const existingItem = existingRes.data?.value?.[0];
+
+        const fields = {
+          Title: title,
+          PersonEmail: email,
+          ShiftDate: shiftDateFormatted,
+          TimeSlot: shiftTimeFormatted,
+          Available: true,
+          PairWithEmail: slotData.pairWith || null,
+          IncludesPlus1: slotData.hasPlus1 || false,
+          Plus1Name: slotData.plus1Name || null,
+        };
+
+        if (existingItem) {
+          // Update existing entry
+          const updateUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items/${existingItem.id}`;
+          await axios.patch(updateUrl, { fields }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          console.log(`Updated availability for ${email} on ${shiftDateFormatted} ${shiftTimeFormatted}`);
+          results.push({ type: 'updated', slot: slotId });
+        } else {
+          // Create new entry
+          const createUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items`;
+          await axios.post(createUrl, { fields }, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          console.log(`Created availability for ${email} on ${shiftDateFormatted} ${shiftTimeFormatted}`);
+          results.push({ type: 'created', slot: slotId });
+        }
+      } catch (slotError) {
+        console.error(`Error processing ${slotId}:`, slotError.message);
       }
-      results.push(result);
     }
 
     res.json({
@@ -218,12 +205,10 @@ app.post('/api/availability', async (req, res) => {
   }
 });
 
-// Serve the form (you can also host this separately)
 app.get('/', (req, res) => {
   res.send('API is running. Use POST /api/availability to submit shifts.');
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bookshop Shift Scheduler API listening on port ${PORT}`);
