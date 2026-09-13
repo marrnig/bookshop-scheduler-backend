@@ -176,16 +176,34 @@ app.post('/api/availability', async (req, res) => {
       }
 
       // Create availability record
+      // Check if entry exists for this person + shift
+      const existingRes = await axios.get(
+        `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items?$filter=PersonEmail eq '${email}' and fields/ShiftID eq '${shift.id}'`,
+        { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+      ).catch(() => ({ data: { value: [] } }));
+      
+      const existing = existingRes.data?.value?.[0];
+      const title = `${email} - ${shift.TimeSlot} ${shift.ShiftDate.split('T')[0]}`;
+      
       const fields = {
+        Title: title,
         PersonEmail: email,
-        ShiftID: shift.id, // Link to shift
         Available: true,
         PairWithEmail: slotData.pairWith || null,
         IncludesPlus1: slotData.hasPlus1 || false,
         Plus1Name: slotData.plus1Name || null,
       };
-
-      const result = await writeToSharePoint(CONFIG.AVAILABILITY_LIST_ID, fields);
+      
+      let result;
+      if (existing) {
+        // Update existing
+        const graphUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items/${existing.id}`;
+        result = await axios.patch(graphUrl, { fields }, { headers: { Authorization: `Bearer ${await getAccessToken()}` } });
+      } else {
+        // Create new with ShiftID lookup
+        fields.ShiftID = shift.id;
+        result = await writeToSharePoint(CONFIG.AVAILABILITY_LIST_ID, fields);
+      }
       results.push(result);
     }
 
