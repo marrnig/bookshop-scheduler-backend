@@ -163,8 +163,7 @@ app.post('/api/availability', async (req, res) => {
 
       // Find matching shift
       const shifts = await getSharePointItems(CONFIG.SHIFTS_LIST_ID);
-      console.log('DEBUG: Shifts from SharePoint:', JSON.stringify(shifts, null, 2));
-      
+            
       const shift = shifts.find(s =>
         s.ShiftDate.split('T')[0] === dateStr &&
         s.TimeSlot?.toLowerCase() === timeSlot?.toLowerCase()
@@ -185,6 +184,7 @@ app.post('/api/availability', async (req, res) => {
         Plus1Name: slotData.plus1Name || null,
       };
 
+      fields.ShiftID = shift.id;
       const result = await writeToSharePoint(CONFIG.AVAILABILITY_LIST_ID, fields);
       results.push(result);
     }
