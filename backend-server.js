@@ -157,7 +157,9 @@ app.post('/api/availability', async (req, res) => {
     for (const [slotId, slotData] of slots) {
       if (!slotData.available) continue; // Skip unavailable slots
 
-      const [dateStr, timeSlot] = slotId.split('-');
+      const parts = slotId.split('-');
+      const timeSlot = parts[parts.length - 1]; // Last part (am/pm)
+      const dateStr = parts.slice(0, -1).join('-'); // Everything before (date)
 
       // Find matching shift
       const shifts = await getSharePointItems(CONFIG.SHIFTS_LIST_ID);
