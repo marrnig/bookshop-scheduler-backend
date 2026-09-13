@@ -154,10 +154,15 @@ app.post('/api/availability', async (req, res) => {
       try {
         const filterQuery = `PersonEmail eq '${email}' and fields/ShiftDate eq '${shiftDateFormatted}T00:00:00Z' and fields/TimeSlot eq '${shiftTimeFormatted}'`;
         const checkUrl = `https://graph.microsoft.com/v1.0/sites/${CONFIG.SHAREPOINT_SITE_ID}/lists/${CONFIG.AVAILABILITY_LIST_ID}/items?$filter=${encodeURIComponent(filterQuery)}`;
-
+        
+        console.log(`Checking for existing: ${checkUrl}`);
+        
         const existingRes = await axios.get(checkUrl, {
           headers: { Authorization: `Bearer ${token}` }
-        }).catch(() => ({ data: { value: [] } }));
+        }).catch((err) => {
+          console.log('Filter check failed:', err.response?.data || err.message);
+          return ({ data: { value: [] } });
+        });
 
         const existingItem = existingRes.data?.value?.[0];
 
