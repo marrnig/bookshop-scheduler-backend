@@ -175,6 +175,7 @@ app.post('/api/availability', async (req, res) => {
       }
 
       // Create availability record
+      const title = `${email} - ${shift.TimeSlot} ${shift.ShiftDate.split('T')[0]}`;
       const fields = {
         PersonEmail: email,
         ShiftID: shift.id, // Link to shift
