@@ -5,6 +5,9 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
+const cors = require('cors');
+app.use(cors());
+
 // Configuration
 const CONFIG = {
   CLIENT_ID: process.env.CLIENT_ID,
